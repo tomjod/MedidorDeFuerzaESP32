@@ -24,6 +24,8 @@
 #include <HX711_ADC.h> // Librería avanzada para los sensores
 #include <TFT_eSPI.h>  // Librería optimizada para la pantalla
 #include <SPI.h>
+#include <Preferences.h> // Para guardar calibración en NVS
+
 
 // --- CONFIGURACIÓN DE PINES (SENSORES) ---
 const int PIN_ISQUIOS_DAT = 19;
@@ -33,18 +35,19 @@ const int PIN_CUADS_CLK = 22;
 
 // --- CONFIGURACIÓN DE PINES (CONTROLES) ---
 const int PIN_BTN_TARE = 32;
-const int PIN_LED_STATUS = 4;  // <-- CAMBIADO (antes 33)
-const int PIN_LED_BT = 23;     // <-- CAMBIADO (antes 25)
+const int PIN_LED_STATUS = 4;  
+const int PIN_LED_BT = 23;    
 
 // --- OBJETOS GLOBALES ---
 TFT_eSPI tft = TFT_eSPI();
 BluetoothSerial SerialBT;
 HX711_ADC sensorIsquios(PIN_ISQUIOS_DAT, PIN_ISQUIOS_CLK);
 HX711_ADC sensorCuads(PIN_CUADS_DAT, PIN_CUADS_CLK);
+Preferences preferences;
 
 // --- CALIBRACIÓN (¡REEMPLAZAR!) ---
-const float CAL_FACTOR_ISQUIOS = 43082.0; 
-const float CAL_FACTOR_CUADS = 43540.0;   
+volatile float CAL_FACTOR_ISQUIOS = 43082.0; 
+volatile float CAL_FACTOR_CUADS = 43540.0;   
 
 // --- VARIABLES GLOBALES (TIMERS) ---
 unsigned long lastDisplayTime = 0;
@@ -75,6 +78,9 @@ void handleLEDs();
 void handleBluetooth();
 void handleSensorDisplay();
 void updateBTdisplay();
+void drawStaticUI();
+void loadCalibration(); 
+void saveCalibration(); 
 
 
 //=================================================================
@@ -83,6 +89,10 @@ void updateBTdisplay();
 void setup() {
   Serial.begin(115200);
   Serial.println("Iniciando Medidor de Fuerza H:Q (v2.1)...");
+
+  // Cargar calibración guardada de la NVS
+  preferences.begin("fuerza-hq", false); // false = read/write
+  loadCalibration();
 
   initControls(); // Inicializar pines de LEDs y Botón
   initDisplay();
@@ -163,15 +173,18 @@ void initSensors() {
   }
 
   Serial.println("Sensores tarados y listos.");
-  tft.fillScreen(TFT_BLACK); 
 }
 
 void initBluetooth() {
+  Serial.println("Iniciando Bluetooth...");
   if (SerialBT.begin("ESP32_Fuerza_HQ")) {
     BTReady = true;
     Serial.println("Bluetooth iniciado. Listo para conectar.");
+    tft.println("BT Iniciado");
   }
   updateBTdisplay();
+  tft.fillScreen(TFT_BLACK);
+  drawStaticUI();
 }
 
 //=================================================================
@@ -207,19 +220,50 @@ void handleTareButton() {
  * @brief Revisa comandos entrantes (Serial y Bluetooth)
  */
 void handleBluetooth() {
-  // También revisamos el Serial por si acaso
+  char cmdChar = ' ';
+  String cmdString = "";
+
+  // Revisar Serial (PC)
   if (Serial.available() > 0) {
-    if (Serial.read() == 't') {
-      tareSensors();
-    }
+    cmdString = Serial.readStringUntil('\n');
+    cmdChar = cmdString.charAt(0); // Para compatibilidad con 't'
   }
   
-  // Revisa comandos de Bluetooth
+  // Revisar Bluetooth (Teléfono)
   if (SerialBT.available() > 0) {
-    if (SerialBT.read() == 't') {
-      tareSensors();
+    cmdString = SerialBT.readStringUntil('\n');
+    cmdChar = cmdString.charAt(0); // Para compatibilidad con 't'
+  }
+
+  // Procesar el comando
+  cmdString.trim(); // Limpiar espacios en blanco
+
+  if (cmdChar == 't') { // Comando de Tara
+    tareSensors();
+  }
+  else if (cmdString.startsWith("i=")) { // Ajustar Isquios
+    float nuevoFactor = cmdString.substring(2).toFloat();
+    if (nuevoFactor > 1000) { // Un chequeo de seguridad
+      CAL_FACTOR_ISQUIOS = nuevoFactor;
+      sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS);
+      Serial.print("Nuevo factor Isquios: ");
+      Serial.println(CAL_FACTOR_ISQUIOS);
     }
-    // Aquí puedes agregar más comandos (ej: 'c' para calibrar)
+  }
+  else if (cmdString.startsWith("q=")) { // Ajustar Cuádriceps
+    float nuevoFactor = cmdString.substring(2).toFloat();
+    if (nuevoFactor > 1000) { // Un chequeo de seguridad
+      CAL_FACTOR_CUADS = nuevoFactor;
+      sensorCuads.setCalFactor(CAL_FACTOR_CUADS);
+      Serial.print("Nuevo factor Cuads: ");
+      Serial.println(CAL_FACTOR_CUADS);
+    }
+  }
+  else if (cmdString == "save") { // Guardar calibración
+    saveCalibration();
+  }
+  else if (cmdString == "load") { // Recargar calibración (por si acaso)
+    loadCalibration();
   }
 }
 
@@ -237,13 +281,6 @@ void handleLEDs() {
       digitalWrite(PIN_LED_BT, ledBTState );
     }
   }
-
-  // 2. LED de Estado: Heartbeat no-bloqueante
-  /*if (millis() - lastLedBlinkTime >= LED_BLINK_INTERVAL_MS) {
-    lastLedBlinkTime = millis();
-    ledStatusState = !ledStatusState; // Invierte el estado
-    digitalWrite(PIN_LED_STATUS, ledStatusState);
-  }*/
 
   if (!ledStatusState) {
     digitalWrite(PIN_LED_STATUS, HIGH);
@@ -322,32 +359,115 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads) {
   // --- FUERZA ISQUIOTIBIALES ---
   tft.setTextSize(3);
   tft.setTextColor(TFT_CYAN, TFT_BLACK); 
-  tft.setCursor(10, 20);
-  tft.print("Isquios:");
   tft.fillRect(10, 80, 200, 40, TFT_BLACK); 
   tft.setCursor(10, 50);
   tft.print(max(0.0f, fuerzaIsquios), 2);
+  tft.setTextSize(2);
   tft.print(" Kg");
+
 
   // --- FUERZA CUÁDRICEPS ---
+  tft.setTextSize(3);
   tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-  tft.setCursor(10,100);
-  tft.print("Cuads:");
   tft.fillRect(10, 190, 200, 40, TFT_BLACK);
-  tft.setCursor(10, 130);
+  tft.setCursor(tft.width() - 120, 50);
   tft.print(max(0.0f, fuerzaCuads), 2); // 2 decimales
+  tft.setTextSize(2);
   tft.print(" Kg");
 
-  // --- RATIO H:Q ---
+
+  // --- RATIO H:Q (Hamstring-to-Quadriceps ratio)--- 
   float ratio = 0.0;
   if (fuerzaCuads > 0.01) { 
     ratio = (fuerzaIsquios / fuerzaCuads);
   }
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setCursor(10, 270);
-  tft.print("Ratio H:Q: ");
-  tft.fillRect(140, 270, 100, 30, TFT_BLACK);
-  tft.setCursor(140, 270);
+
+  int ratioLabelX = tft.width() / 2 - 80;
+  // 2. Definimos el Y de la línea (el mismo que en drawStaticUI)
+  int ratioLabelY = 120;
+  // 3. Calculamos dónde termina la etiqueta "Ratio H:Q: " (12 chars * 12 px)
+  int ratioValueX = ratioLabelX + (12 * 12);
+
+  // 4. Borra SÓLO el área del número
+  tft.fillRect(ratioValueX, ratioLabelY, 170 - ratioValueX, 20, TFT_BLACK);
+  // 5. Pone el cursor al inicio del número
+  tft.setCursor(ratioValueX, ratioLabelY);
+  // 6. Imprime el número
   tft.print(ratio, 2);
+
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setCursor(5, tft.height() - 10); // Abajo a la izquierda
+  tft.print("F1:");
+  tft.print(CAL_FACTOR_ISQUIOS, 0);
+  tft.print(" F2:");
+  tft.print(CAL_FACTOR_CUADS, 0);
+}
+
+/**
+ * @brief Dibuja la UI estática (etiquetas) una sola vez.
+ * Esto previene el parpadeo (flicker).
+ */
+void drawStaticUI() {
+  tft.fillScreen(TFT_BLACK); // Limpia la pantalla
+
+  // --- ETIQUETA ISQUIOTIBIALES ---
+  tft.setTextSize(3);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK); 
+  tft.setCursor(10, 10);
+  tft.print("Isquios"); 
+  tft.setCursor(10, 50);
+
+
+  // --- ETIQUETA CUÁDRICEPS ---
+  tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+  tft.setCursor(tft.width() - 120, 10);
+  tft.print("Cuads");
+
+
+  // --- ETIQUETA RATIO H:Q ---
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  // Usamos las mismas coordenadas base que en updateDisplay
+  int ratioLabelX = tft.width() / 2 - 80;
+  int ratioLabelY = 120;
+  tft.setCursor(ratioLabelX, ratioLabelY);
+  tft.print("Ratio H:Q: ");
+}
+
+/**
+ * @brief Carga los factores de calibración desde la NVS.
+ * Si no existen, usa los valores por defecto.
+ * Aplica los factores a los sensores.
+ */
+void loadCalibration() {
+  Serial.println("Cargando calibracion desde NVS...");
+  // Carga el valor, o usa el default (el valor actual) si no se encuentra
+  CAL_FACTOR_ISQUIOS = preferences.getFloat("cal_isquios", CAL_FACTOR_ISQUIOS);
+  CAL_FACTOR_CUADS = preferences.getFloat("cal_cuads", CAL_FACTOR_CUADS);
+
+  Serial.print("Factor Isquios: "); Serial.println(CAL_FACTOR_ISQUIOS);
+  Serial.print("Factor Cuads: "); Serial.println(CAL_FACTOR_CUADS);
+
+  // Aplicar los factores a los sensores
+  sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS);
+  sensorCuads.setCalFactor(CAL_FACTOR_CUADS);
+}
+
+/**
+ * @brief Guarda los factores de calibración actuales en la NVS.
+ */
+void saveCalibration() {
+  Serial.println("Guardando calibracion en NVS...");
+  preferences.putFloat("cal_isquios", CAL_FACTOR_ISQUIOS);
+  preferences.putFloat("cal_cuads", CAL_FACTOR_CUADS);
+
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setCursor(10, tft.height() / 2); // Centrado
+  tft.print("¡Calibracion Guardada!");
+  delay(1000);
+  drawStaticUI(); // Redibujar la UI
 }
