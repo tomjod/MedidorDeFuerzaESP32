@@ -56,8 +56,7 @@ unsigned long lastLedBtTime = 0;
 const int LED_BLINK_INTERVAL_MS = 1000; // 1 segundo
 bool ledStatusState = LOW;
 bool ledBTState = LOW;
-bool BTReady = false;
-bool BTConnected = false;
+bool lastBTState = false;
 float ratio = 0.0;
 
 // --- VARIABLES GLOBALES (BOTÓN DEBOUNCE) ---
@@ -85,7 +84,7 @@ void drawStaticUI();
 void loadCalibration(); 
 void saveCalibration(); 
 void sendBinaryData(float f_isquios, float f_cuads, float f_ratio);
-void updateDisplay(float fuerzaIsquios, float fuerzaCuads);
+void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio);
 
 
 
@@ -102,10 +101,10 @@ void setup() {
 
   initControls(); // Inicializar pines de LEDs y Botón
   initDisplay();
-  initSensors();
-
   // Iniciar Bluetooth
   initBluetooth();
+  initSensors();
+
 }
 
 //=================================================================
@@ -124,6 +123,11 @@ void loop() {
   
   // 4. Manejar la lectura de sensores y la actualización de pantalla (con timer)
   handleSensorDisplay();
+
+  // 5. Actualizar el estado de Bluetooth (con timer)
+  updateBTdisplay();
+
+  delay(10);
 }
 
 //=================================================================
@@ -179,18 +183,18 @@ void initSensors() {
   }
 
   Serial.println("Sensores tarados y listos.");
+  delay(1000);
+  tft.fillScreen(TFT_BLACK);
+  drawStaticUI();
 }
 
 void initBluetooth() {
   Serial.println("Iniciando Bluetooth...");
+  tft.println("Iniciando Bluetooth...");
   if (SerialBT.begin("ESP32_Fuerza_HQ")) {
-    BTReady = true;
     Serial.println("Bluetooth iniciado. Listo para conectar.");
-    tft.println("BT Iniciado");
   }
-  updateBTdisplay();
-  tft.fillScreen(TFT_BLACK);
-  drawStaticUI();
+  delay(1000);
 }
 
 //=================================================================
@@ -295,7 +299,7 @@ void handleLEDs() {
 }
 
 /**
- * @brief Lee sensores y actualiza la pantalla (controlado por timer)
+ * @brief Lee sensores, actualiza la pantalla y envía datos por BT (controlado por timer)
  */
 void handleSensorDisplay() {
   // Controlar el refresco de pantalla para evitar parpadeo (Flicker)
@@ -307,13 +311,13 @@ void handleSensorDisplay() {
     sensorCuads.update();
 
     // Obtiene el último valor promediado
-    float fuerzaIsquios = sensorIsquios.getData();
-    float fuerzaCuads = sensorCuads.getData();
+    float fuerzaIsquios = max(0.0f, sensorIsquios.getData());
+    float fuerzaCuads = max(0.0f, sensorCuads.getData());
     // --- RATIO H:Q (Hamstring-to-Quadriceps ratio)--- 
 
     float ratio = 0.0;
     if (fuerzaCuads > 0.01) { 
-      ratio = (fuerzaIsquios / fuerzaCuads);
+      ratio = max(0.0f, (fuerzaIsquios / fuerzaCuads));
     }
 
     // Actualizar la pantalla
@@ -326,15 +330,15 @@ void handleSensorDisplay() {
 }
 
 void updateBTdisplay() {
-  if (BTReady && !BTConnected) {
-    tft.setTextSize(2);
+  tft.setTextSize(1);
+  tft.setCursor(tft.width() - 100, tft.height() - 10); // Abajo a la derecha
+
+  if (!SerialBT.connected()) {
+    lastBTState = SerialBT.connected();
     tft.setTextColor(TFT_RED, TFT_BLACK); 
-    tft.setCursor(160, 150);
-    tft.println("BT waiting...");
-  } else if (BTConnected) {
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_BLUE, TFT_BLACK); 
-    tft.setCursor(100, 20);
+    tft.println("BT waiting...");   
+  } else {
+    tft.setTextColor(TFT_GREEN, TFT_BLACK); 
     tft.println("BT connected");
   }
 }
@@ -349,7 +353,9 @@ void updateBTdisplay() {
 void tareSensors() {
   Serial.println("Tarando sensores...");
   tft.fillScreen(TFT_BLACK);
-  tft.setCursor(10, 10);
+  tft.setCursor(tft.width() / 2 - 50, tft.height() / 2 - 10);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.println("Tarando...");
   
   sensorIsquios.tare(); // Esta función es bloqueante
@@ -362,7 +368,10 @@ void tareSensors() {
   // Enviar confirmación por BT
   if(SerialBT.connected()) {
     SerialBT.println("Tara Completa");
+    SerialBT.write(0x06); // ACK (Carácter de confirmación)
+    SerialBT.flush();
   }
+  drawStaticUI();
 }
 
 
