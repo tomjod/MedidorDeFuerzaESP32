@@ -5,11 +5,9 @@
  * SENSORES: 2x Celdas de Carga "S" + 2x SparkFun HX711
  * CONTROLES: 1x Botón (Tara), 2x LEDs (Estado, BT)
  *
- * *** VERSIÓN 2.1 (Pines de LED reasignados) ***
- * - LED de Estado (Heartbeat) movido a GPIO 4
- * - LED de Bluetooth movido a GPIO 23
+ * AUTOR: Ing. Alexis Ocando
  */
-#include "BluetoothSerial.h" // Librería para Bluetooth
+#include "BluetoothSerial.h" 
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
 #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
@@ -45,7 +43,7 @@ HX711_ADC sensorIsquios(PIN_ISQUIOS_DAT, PIN_ISQUIOS_CLK);
 HX711_ADC sensorCuads(PIN_CUADS_DAT, PIN_CUADS_CLK);
 Preferences preferences;
 
-// --- CALIBRACIÓN (¡REEMPLAZAR!) ---
+// --- CALIBRACIÓN ---
 volatile float CAL_FACTOR_ISQUIOS = 43082.0; 
 volatile float CAL_FACTOR_CUADS = 43540.0;   
 
@@ -60,11 +58,17 @@ bool ledStatusState = LOW;
 bool ledBTState = LOW;
 bool BTReady = false;
 bool BTConnected = false;
+float ratio = 0.0;
 
 // --- VARIABLES GLOBALES (BOTÓN DEBOUNCE) ---
 int lastButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
 const int DEBOUNCE_DELAY_MS = 100;
+
+// --- DEFINICIÓN DEL PAQUETE BINARIO ---
+#define STX 0x02 // STX
+#define ETX 0x03 // ETX
+#define PAYLOAD_LEN 12 // 3 floats * 4 bytes/float = 12 bytes
 
 // --- Declaraciones de funciones ---
 void initDisplay();
@@ -72,7 +76,6 @@ void initSensors();
 void initControls();
 void initBluetooth();
 void tareSensors();
-void updateDisplay(float fuerzaIsquios, float fuerzaCuads);
 void handleTareButton();
 void handleLEDs();
 void handleBluetooth();
@@ -81,6 +84,9 @@ void updateBTdisplay();
 void drawStaticUI();
 void loadCalibration(); 
 void saveCalibration(); 
+void sendBinaryData(float f_isquios, float f_cuads, float f_ratio);
+void updateDisplay(float fuerzaIsquios, float fuerzaCuads);
+
 
 
 //=================================================================
@@ -303,9 +309,19 @@ void handleSensorDisplay() {
     // Obtiene el último valor promediado
     float fuerzaIsquios = sensorIsquios.getData();
     float fuerzaCuads = sensorCuads.getData();
+    // --- RATIO H:Q (Hamstring-to-Quadriceps ratio)--- 
+
+    float ratio = 0.0;
+    if (fuerzaCuads > 0.01) { 
+      ratio = (fuerzaIsquios / fuerzaCuads);
+    }
 
     // Actualizar la pantalla
-    updateDisplay(fuerzaIsquios, fuerzaCuads);
+    updateDisplay(fuerzaIsquios, fuerzaCuads, ratio);
+
+    // Enviar la data por BT
+    sendBinaryData(fuerzaIsquios, fuerzaCuads, ratio);
+
   }
 }
 
@@ -352,9 +368,8 @@ void tareSensors() {
 
 /**
  * @brief Dibuja los datos en la pantalla ST7789
- * (Esta función no cambió)
  */
-void updateDisplay(float fuerzaIsquios, float fuerzaCuads) {
+void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
 
   // --- FUERZA ISQUIOTIBIALES ---
   tft.setTextSize(3);
@@ -376,11 +391,7 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads) {
   tft.print(" Kg");
 
 
-  // --- RATIO H:Q (Hamstring-to-Quadriceps ratio)--- 
-  float ratio = 0.0;
-  if (fuerzaCuads > 0.01) { 
-    ratio = (fuerzaIsquios / fuerzaCuads);
-  }
+  // --- RATIO H:Q ---
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
@@ -404,6 +415,35 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads) {
   tft.print(CAL_FACTOR_ISQUIOS, 0);
   tft.print(" F2:");
   tft.print(CAL_FACTOR_CUADS, 0);
+}
+
+
+void sendBinaryData(float f_isquios, float f_cuads, float f_ratio) {
+     // Solo enviar si hay un teléfono conectado
+  if (!SerialBT.connected()) {
+    return;
+  }
+  
+  // 1. Crear el buffer del payload (12 bytes)
+  byte payload[PAYLOAD_LEN];
+  
+  // Copiar los 4 bytes de cada float al buffer
+  memcpy(payload, &f_isquios, 4);
+  memcpy(payload + 4, &f_cuads, 4);
+  memcpy(payload + 8, &f_ratio, 4);
+
+  // 2. Calcular el Checksum (XOR de 8 bits)
+  byte checksum = 0;
+  for (int i = 0; i < PAYLOAD_LEN; i++) {
+    checksum ^= payload[i]; // XOR con cada byte del payload
+  }
+
+  // 3. Enviar el paquete completo
+  SerialBT.write(STX);
+  SerialBT.write(PAYLOAD_LEN);
+  SerialBT.write(payload, PAYLOAD_LEN); // .write() puede enviar un array completo
+  SerialBT.write(checksum);
+  SerialBT.write(ETX);
 }
 
 /**
