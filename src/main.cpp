@@ -38,6 +38,7 @@ const int PIN_LED_BT = 23;
 
 // --- OBJETOS GLOBALES ---
 TFT_eSPI tft = TFT_eSPI();
+TFT_eSprite sprite = TFT_eSprite(&tft);
 BluetoothSerial SerialBT;
 HX711_ADC sensorIsquios(PIN_ISQUIOS_DAT, PIN_ISQUIOS_CLK);
 HX711_ADC sensorCuads(PIN_CUADS_DAT, PIN_CUADS_CLK);
@@ -68,6 +69,8 @@ const int DEBOUNCE_DELAY_MS = 100;
 #define STX 0x02 // STX
 #define ETX 0x03 // ETX
 #define PAYLOAD_LEN 12 // 3 floats * 4 bytes/float = 12 bytes
+
+const float GRAVITY = 9.81; // Factor de conversión Kg -> Newtons
 
 // --- Declaraciones de funciones ---
 void initDisplay();
@@ -148,6 +151,10 @@ void initDisplay() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK); 
   tft.setTextSize(2);
   tft.println("Iniciando...");
+  
+  // Crear el sprite para el doble buffer
+  sprite.createSprite(200, 50); // Ancho suficiente para "XXX.X N" en tamaño 3
+  
   delay(1000);
 }
 
@@ -255,7 +262,7 @@ void handleBluetooth() {
     float nuevoFactor = cmdString.substring(2).toFloat();
     if (nuevoFactor > 1000) { // Un chequeo de seguridad
       CAL_FACTOR_ISQUIOS = nuevoFactor;
-      sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS);
+      sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS); 
       Serial.print("Nuevo factor Isquios: ");
       Serial.println(CAL_FACTOR_ISQUIOS);
     }
@@ -310,9 +317,9 @@ void handleSensorDisplay() {
     sensorIsquios.update();
     sensorCuads.update();
 
-    // Obtiene el último valor promediado
-    float fuerzaIsquios = max(0.0f, sensorIsquios.getData());
-    float fuerzaCuads = max(0.0f, sensorCuads.getData());
+    // Obtiene el último valor promediado y convierte a Newtons
+    float fuerzaIsquios = max(0.0f, sensorIsquios.getData()) * GRAVITY;
+    float fuerzaCuads = max(0.0f, sensorCuads.getData()) * GRAVITY;
     // --- RATIO H:Q (Hamstring-to-Quadriceps ratio)--- 
 
     float ratio = 0.0;
@@ -381,23 +388,23 @@ void tareSensors() {
 void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
 
   // --- FUERZA ISQUIOTIBIALES ---
-  tft.setTextSize(3);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK); 
-  tft.fillRect(10, 80, 200, 40, TFT_BLACK); 
-  tft.setCursor(10, 50);
-  tft.print(max(0.0f, fuerzaIsquios), 2);
-  tft.setTextSize(2);
-  tft.print(" Kg");
+  sprite.fillSprite(TFT_BLACK);
+  sprite.setTextColor(TFT_CYAN, TFT_BLACK);
+  sprite.setTextSize(3); 
+  sprite.setCursor(0, 10); // Un poco de margen vertical
+  sprite.print(max(0.0f, fuerzaIsquios), 1);
+  sprite.print(" N");
+  sprite.pushSprite(10, 50);
 
 
   // --- FUERZA CUÁDRICEPS ---
-  tft.setTextSize(3);
-  tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-  tft.fillRect(10, 190, 200, 40, TFT_BLACK);
-  tft.setCursor(tft.width() - 120, 50);
-  tft.print(max(0.0f, fuerzaCuads), 2); // 2 decimales
-  tft.setTextSize(2);
-  tft.print(" Kg");
+  sprite.fillSprite(TFT_BLACK);
+  sprite.setTextColor(TFT_ORANGE, TFT_BLACK);
+  sprite.setTextSize(3);
+  sprite.setCursor(0, 10);
+  sprite.print(max(0.0f, fuerzaCuads), 1); 
+  sprite.print(" N");
+  sprite.pushSprite(tft.width() - 140, 50); // Ajustado para dar más espacio
 
 
   // --- RATIO H:Q ---
