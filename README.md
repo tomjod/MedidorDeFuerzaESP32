@@ -36,8 +36,8 @@ El sistema utiliza celdas de carga para medir la fuerza ejercida en tiempo real,
 | | CLK | GPIO 5 | Reloj HX711 |
 | **Sensor Cuads** | DAT | GPIO 21 | Datos HX711 |
 | | CLK | GPIO 22 | Reloj HX711 |
-| **Pantalla ST7789** | MOSI (SDA) | GPIO 13 | *Verificar config TFT_eSPI |
-| | SCLK (SCL) | GPIO 14 | *Verificar config TFT_eSPI |
+| **Pantalla ST7789** | SDA | GPIO 13 | Serial Data |
+| | SCL | GPIO 14 | Serial Clock |
 | | CS | (No conectado) | Chip Select (Opcional) |
 | | DC | GPIO 26 | Data/Command |
 | | RST | GPIO 27 | Reset |
