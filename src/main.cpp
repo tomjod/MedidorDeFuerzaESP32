@@ -137,6 +137,10 @@ void loop() {
 //  FUNCIONES DE INICIALIZACIÓN
 //=================================================================
 
+//=================================================================
+//  FUNCIONES DE INICIALIZACIÓN
+//=================================================================
+
 void initControls() {
   pinMode(PIN_LED_STATUS, OUTPUT);
   pinMode(PIN_LED_BT, OUTPUT);
@@ -152,8 +156,9 @@ void initDisplay() {
   tft.setTextSize(2);
   tft.println("Iniciando...");
   
-  // Crear el sprite para el doble buffer
-  sprite.createSprite(200, 50); // Ancho suficiente para "XXX.X N" en tamaño 3
+  // Crear el sprite para el buffer completo (320x170)
+  // Esto consume ~108KB de RAM, el ESP32 lo soporta bien.
+  sprite.createSprite(320, 170);
   
   delay(1000);
 }
@@ -192,7 +197,6 @@ void initSensors() {
   Serial.println("Sensores tarados y listos.");
   delay(1000);
   tft.fillScreen(TFT_BLACK);
-  drawStaticUI();
 }
 
 void initBluetooth() {
@@ -337,17 +341,8 @@ void handleSensorDisplay() {
 }
 
 void updateBTdisplay() {
-  tft.setTextSize(1);
-  tft.setCursor(tft.width() - 100, tft.height() - 10); // Abajo a la derecha
-
-  if (!SerialBT.connected()) {
-    lastBTState = SerialBT.connected();
-    tft.setTextColor(TFT_RED, TFT_BLACK); 
-    tft.println("BT waiting...");   
-  } else {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK); 
-    tft.println("BT connected");
-  }
+  // Esta funcion ya no es necesaria porque el estado BT se dibuja en updateDisplay
+  // Se mantiene vacía o se elimina para no romper referencias si las hubiera
 }
 
 //=================================================================
@@ -378,59 +373,115 @@ void tareSensors() {
     SerialBT.write(0x06); // ACK (Carácter de confirmación)
     SerialBT.flush();
   }
-  drawStaticUI();
 }
 
+// Helper para dibujar un arco tipo gauge
+void drawGauge(int x, int y, int r, float val, float maxVal, uint16_t color, String label, String units) {
+  // Fondo del arco (gris oscuro)
+  // Angulos: 0 es derecha (3 horas). 
+  // Queremos un arco de ~240 grados, abierto abajo.
+  // Empezamos en 150 grados (abajo izquierda) y terminamos en 30 grados (abajo derecha) pasando por arriba.
+  // drawSmoothArc(x, y, r, ir, startAngle, endAngle, fg_color, bg_color, arc_end)
+  
+  int ir = r - 10; // Grosor del arco
+  int startAngle = 135;
+  int endAngle = 45;
+  
+  // Fondo
+  sprite.drawSmoothArc(x, y, r, ir, startAngle, endAngle, TFT_DARKGREY, TFT_BLACK, true);
+
+  // Valor mapeado a angulo
+  // startAngle (135) -> 0
+  // endAngle (45) -> maxVal
+  // Nota: drawSmoothArc dibuja en sentido horario. 
+  // De 135 a 405 (45 + 360) son 270 grados de recorrido.
+  
+  float percentage = val / maxVal;
+  if (percentage > 1.0) percentage = 1.0;
+  
+  int arcLength = 270;
+  int currentEndAngle = startAngle + (int)(percentage * arcLength);
+  if (currentEndAngle >= 360) currentEndAngle -= 360;
+
+  // Arco de valor
+  if (val > 0.5) { // Solo dibujar si hay algo de valor para evitar glitches visuales
+      sprite.drawSmoothArc(x, y, r, ir, startAngle, currentEndAngle, color, TFT_BLACK, true);
+  }
+
+  // Texto Valor
+  sprite.setTextDatum(MC_DATUM); // Middle Center
+  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  sprite.setTextSize(3);
+  sprite.drawString(String(val, 0), x, y);
+  
+  // Texto Unidades
+  sprite.setTextSize(1);
+  sprite.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  sprite.drawString(units, x, y + 20);
+
+  // Etiqueta (Titulo)
+  sprite.setTextSize(2);
+  sprite.setTextColor(color, TFT_BLACK);
+  sprite.drawString(label, x, y - r - 15);
+}
 
 /**
- * @brief Dibuja los datos en la pantalla ST7789
+ * @brief Dibuja los datos en la pantalla ST7789 usando Sprites y Gauges
  */
 void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
+  
+  sprite.fillSprite(TFT_BLACK); // Limpiar todo el frame
 
-  // --- FUERZA ISQUIOTIBIALES ---
-  sprite.fillSprite(TFT_BLACK);
-  sprite.setTextColor(TFT_CYAN, TFT_BLACK);
-  sprite.setTextSize(3); 
-  sprite.setCursor(0, 10); // Un poco de margen vertical
-  sprite.print(max(0.0f, fuerzaIsquios), 1);
-  sprite.print(" N");
-  sprite.pushSprite(10, 50);
+  // Dimensiones
+  int w = 320;
+  int h = 170;
+  
+  // Centros de los gauges
+  int r = 55; // Radio
+  int yCenter = h / 2 + 10;
+  int xLeft = 70;
+  int xRight = w - 70;
 
+  // 1. Gauge Isquios (Izquierda)
+  drawGauge(xLeft, yCenter, r, fuerzaIsquios, 1000.0, TFT_CYAN, "ISQUIOS", "N");
 
-  // --- FUERZA CUÁDRICEPS ---
-  sprite.fillSprite(TFT_BLACK);
-  sprite.setTextColor(TFT_ORANGE, TFT_BLACK);
-  sprite.setTextSize(3);
-  sprite.setCursor(0, 10);
-  sprite.print(max(0.0f, fuerzaCuads), 1); 
-  sprite.print(" N");
-  sprite.pushSprite(tft.width() - 140, 50); // Ajustado para dar más espacio
+  // 2. Gauge Cuads (Derecha)
+  drawGauge(xRight, yCenter, r, fuerzaCuads, 1000.0, TFT_ORANGE, "CUADS", "N");
 
+  // 3. Ratio (Centro)
+  sprite.setTextDatum(MC_DATUM);
+  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  
+  sprite.setTextSize(1);
+  sprite.drawString("RATIO H:Q", w/2, yCenter - 20);
+  
+  sprite.setTextSize(4);
+  // Color del ratio segun rango (ejemplo: 0.6 es saludable)
+  uint16_t ratioColor = TFT_WHITE;
+  if(ratio >= 0.55 && ratio <= 0.75) ratioColor = TFT_GREEN;
+  else if (ratio > 0.0) ratioColor = TFT_RED;
+  
+  sprite.setTextColor(ratioColor, TFT_BLACK);
+  sprite.drawFloat(ratio, 2, w/2, yCenter + 10);
 
-  // --- RATIO H:Q ---
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  // 4. Estado Bluetooth (Icono o Texto pequeño)
+  sprite.setTextSize(1);
+  sprite.setTextDatum(TR_DATUM); // Top Right
+  if (SerialBT.connected()) {
+    sprite.setTextColor(TFT_BLUE, TFT_BLACK);
+    sprite.drawString("BT: ON", w - 5, 5);
+  } else {
+    sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    sprite.drawString("BT: --", w - 5, 5);
+  }
 
-  int ratioLabelX = tft.width() / 2 - 80;
-  // 2. Definimos el Y de la línea (el mismo que en drawStaticUI)
-  int ratioLabelY = 120;
-  // 3. Calculamos dónde termina la etiqueta "Ratio H:Q: " (12 chars * 12 px)
-  int ratioValueX = ratioLabelX + (12 * 12);
+  // 5. Debug / Info extra (opcional, abajo)
+  // sprite.setTextDatum(BL_DATUM); // Bottom Left
+  // sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  // sprite.drawString("v2.1", 5, h - 5);
 
-  // 4. Borra SÓLO el área del número
-  tft.fillRect(ratioValueX, ratioLabelY, 170 - ratioValueX, 20, TFT_BLACK);
-  // 5. Pone el cursor al inicio del número
-  tft.setCursor(ratioValueX, ratioLabelY);
-  // 6. Imprime el número
-  tft.print(ratio, 2);
-
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.setCursor(5, tft.height() - 10); // Abajo a la izquierda
-  tft.print("F1:");
-  tft.print(CAL_FACTOR_ISQUIOS, 0);
-  tft.print(" F2:");
-  tft.print(CAL_FACTOR_CUADS, 0);
+  // Push a pantalla
+  sprite.pushSprite(0, 0);
 }
 
 
@@ -460,37 +511,6 @@ void sendBinaryData(float f_isquios, float f_cuads, float f_ratio) {
   SerialBT.write(payload, PAYLOAD_LEN); // .write() puede enviar un array completo
   SerialBT.write(checksum);
   SerialBT.write(ETX);
-}
-
-/**
- * @brief Dibuja la UI estática (etiquetas) una sola vez.
- * Esto previene el parpadeo (flicker).
- */
-void drawStaticUI() {
-  tft.fillScreen(TFT_BLACK); // Limpia la pantalla
-
-  // --- ETIQUETA ISQUIOTIBIALES ---
-  tft.setTextSize(3);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK); 
-  tft.setCursor(10, 10);
-  tft.print("Isquios"); 
-  tft.setCursor(10, 50);
-
-
-  // --- ETIQUETA CUÁDRICEPS ---
-  tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-  tft.setCursor(tft.width() - 120, 10);
-  tft.print("Cuads");
-
-
-  // --- ETIQUETA RATIO H:Q ---
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  // Usamos las mismas coordenadas base que en updateDisplay
-  int ratioLabelX = tft.width() / 2 - 80;
-  int ratioLabelY = 120;
-  tft.setCursor(ratioLabelX, ratioLabelY);
-  tft.print("Ratio H:Q: ");
 }
 
 /**
@@ -525,5 +545,4 @@ void saveCalibration() {
   tft.setCursor(10, tft.height() / 2); // Centrado
   tft.print("¡Calibracion Guardada!");
   delay(1000);
-  drawStaticUI(); // Redibujar la UI
 }
