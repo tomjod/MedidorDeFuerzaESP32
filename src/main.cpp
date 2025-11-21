@@ -92,42 +92,42 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio);
 
 
 //=================================================================
-//  SETUP: Se ejecuta una vez al inicio
+//  SETUP
 //=================================================================
 void setup() {
   Serial.begin(115200);
   Serial.println("Iniciando Medidor de Fuerza H:Q (v2.1)...");
 
-  // Cargar calibración guardada de la NVS
+  // Cargo la calibración que tengo guardada
   preferences.begin("fuerza-hq", false); // false = read/write
   loadCalibration();
 
-  initControls(); // Inicializar pines de LEDs y Botón
+  initControls(); // LEDs y botón
   initDisplay();
-  // Iniciar Bluetooth
+  // BT
   initBluetooth();
   initSensors();
 
 }
 
 //=================================================================
-//  LOOP: Se ejecuta continuamente
+//  LOOP
 //=================================================================
 void loop() {
   
-  // 1. Manejar el botón de tara (con debounce)
+  // 1. Botón de tara (con debounce)
   handleTareButton();
 
-  // 2. Manejar comandos por Bluetooth
+  // 2. Comandos por BT
   handleBluetooth();
   
-  // 3. Manejar los LEDs de estado
+  // 3. LEDs de estado
   handleLEDs();
   
-  // 4. Manejar la lectura de sensores y la actualización de pantalla (con timer)
+  // 4. Leer sensores y actualizar pantalla
   handleSensorDisplay();
 
-  // 5. Actualizar el estado de Bluetooth (con timer)
+  // 5. Estado de BT
   updateBTdisplay();
 
   delay(10);
@@ -137,14 +137,9 @@ void loop() {
 //  FUNCIONES DE INICIALIZACIÓN
 //=================================================================
 
-//=================================================================
-//  FUNCIONES DE INICIALIZACIÓN
-//=================================================================
-
 void initControls() {
   pinMode(PIN_LED_STATUS, OUTPUT);
   pinMode(PIN_LED_BT, OUTPUT);
-  // Usamos el PULLUP interno del ESP32. El botón debe conectarse a GND.
   pinMode(PIN_BTN_TARE, INPUT_PULLUP); 
 }
 
@@ -154,12 +149,8 @@ void initDisplay() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK); 
   tft.setTextSize(2);
-  tft.println("Iniciando...");
-  
-  // Crear el sprite para el buffer completo (320x170)
-  // Esto consume ~108KB de RAM, el ESP32 lo soporta bien.
+  tft.println("Iniciando...");  
   sprite.createSprite(320, 170);
-  
   delay(1000);
 }
 
@@ -170,7 +161,7 @@ void initSensors() {
   sensorIsquios.begin();
   sensorIsquios.setGain(128);
   sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS);
-  sensorIsquios.start(2000, true); // 2s estabilización y tara
+  sensorIsquios.start(2000, true); // 2s para estabilizar
   if (sensorIsquios.getTareTimeoutFlag()) {
     Serial.println("Error S1 Timeout");
     tft.println("Error S1 Timeout");
@@ -179,13 +170,13 @@ void initSensors() {
   sensorCuads.begin();
   sensorCuads.setGain(128);
   sensorCuads.setCalFactor(CAL_FACTOR_CUADS);
-  sensorCuads.start(2000, true); // 2s estabilización y tara
+  sensorCuads.start(2000, true); // 2s para estabilizar
   if (sensorCuads.getTareTimeoutFlag()) {
     Serial.println("Error S2 Timeout");
     tft.println("Error S2 Timeout");
   }
 
-  // Esperar a que ambos estén listos
+  // Espero a que estén listos
   unsigned long startWait = millis();
   while(millis() - startWait < 3000) { 
     sensorIsquios.update();
@@ -209,62 +200,51 @@ void initBluetooth() {
 }
 
 //=================================================================
-//  FUNCIONES DE TAREAS (LLAMADAS DESDE EL LOOP)
+//  FUNCIONES PRINCIPALES
 //=================================================================
 
-/**
- * @brief Revisa el botón de tara con debounce de software.
- * Llama a tareSensors() si se presiona.
- */
+// Reviso el botón de tara con debounce
 void handleTareButton() {
   int reading = digitalRead(PIN_BTN_TARE);
   
-
-  // Si el estado del botón cambió (ruido o presión), resetea el timer de debounce
   if (reading != lastButtonState) {
     lastDebounceTime = millis();
     lastButtonState = reading;
   }
 
-  // Si ha pasado suficiente tiempo desde el último cambio...
   if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY_MS) {
- 
-    // Si el nuevo estado es PRESIONADO (LOW porque usamos PULLUP)
     if (lastButtonState == LOW) {
       tareSensors();
     }
-    
   }
 }
 
-/**
- * @brief Revisa comandos entrantes (Serial y Bluetooth)
- */
+// Reviso comandos que llegan por Serial o BT
 void handleBluetooth() {
   char cmdChar = ' ';
   String cmdString = "";
 
-  // Revisar Serial (PC)
+  // Desde la PC
   if (Serial.available() > 0) {
     cmdString = Serial.readStringUntil('\n');
     cmdChar = cmdString.charAt(0); // Para compatibilidad con 't'
   }
   
-  // Revisar Bluetooth (Teléfono)
+  // Desde el teléfono
   if (SerialBT.available() > 0) {
     cmdString = SerialBT.readStringUntil('\n');
     cmdChar = cmdString.charAt(0); // Para compatibilidad con 't'
   }
 
-  // Procesar el comando
-  cmdString.trim(); // Limpiar espacios en blanco
+  // Proceso el comando
+  cmdString.trim();
 
   if (cmdChar == 't') { // Comando de Tara
     tareSensors();
   }
   else if (cmdString.startsWith("i=")) { // Ajustar Isquios
     float nuevoFactor = cmdString.substring(2).toFloat();
-    if (nuevoFactor > 1000) { // Un chequeo de seguridad
+    if (nuevoFactor > 1000) { 
       CAL_FACTOR_ISQUIOS = nuevoFactor;
       sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS); 
       Serial.print("Nuevo factor Isquios: ");
@@ -273,32 +253,30 @@ void handleBluetooth() {
   }
   else if (cmdString.startsWith("q=")) { // Ajustar Cuádriceps
     float nuevoFactor = cmdString.substring(2).toFloat();
-    if (nuevoFactor > 1000) { // Un chequeo de seguridad
+    if (nuevoFactor > 1000) { 
       CAL_FACTOR_CUADS = nuevoFactor;
       sensorCuads.setCalFactor(CAL_FACTOR_CUADS);
       Serial.print("Nuevo factor Cuads: ");
       Serial.println(CAL_FACTOR_CUADS);
     }
   }
-  else if (cmdString == "save") { // Guardar calibración
+  else if (cmdString == "save") { // Guardar
     saveCalibration();
   }
-  else if (cmdString == "load") { // Recargar calibración (por si acaso)
+  else if (cmdString == "load") { // Recargar
     loadCalibration();
   }
 }
 
-/**
- * @brief Actualiza los LEDs de estado (Heartbeat y BT)
- */
+// LEDs de estado
 void handleLEDs() {
-  // 1. LED de Bluetooth: Sólido ON si está conectado, OFF si no.
+  // LED BT: encendido si está conectado
   if (SerialBT.connected()) {
     digitalWrite(PIN_LED_BT, HIGH);
   } else {
     if (millis() - lastLedBtTime >= (LED_BLINK_INTERVAL_MS - 500)) {
       lastLedBtTime = millis();
-      ledBTState = !ledBTState; // Invierte el estado
+      ledBTState = !ledBTState;
       digitalWrite(PIN_LED_BT, ledBTState );
     }
   }
@@ -309,54 +287,42 @@ void handleLEDs() {
   } 
 }
 
-/**
- * @brief Lee sensores, actualiza la pantalla y envía datos por BT (controlado por timer)
- */
+// Leo sensores, actualizo pantalla y mando data por BT
 void handleSensorDisplay() {
-  // Controlar el refresco de pantalla para evitar parpadeo (Flicker)
   if (millis() - lastDisplayTime >= DISPLAY_INTERVAL_MS) {
     lastDisplayTime = millis();
-
-    // Llama a update() (no-bloqueante)
     sensorIsquios.update();
     sensorCuads.update();
 
-    // Obtiene el último valor promediado y convierte a Newtons
+    // Obtengo el valor y lo paso a Newtons
     float rawIsquios = sensorIsquios.getData() * GRAVITY;
     float rawCuads = sensorCuads.getData() * GRAVITY;
 
-    // Aplicar Deadzone / Umbral mínimo (3N ~ 0.3kg)
+    // Deadzone de 3N para filtrar ruido
     float fuerzaIsquios = (rawIsquios > 3.0) ? rawIsquios : 0.0f;
     float fuerzaCuads = (rawCuads > 3.0) ? rawCuads : 0.0f;
 
-    // --- RATIO H:Q (Hamstring-to-Quadriceps ratio)--- 
+    // Ratio H:Q
 
     float ratio = 0.0;
     if (fuerzaCuads > 3.0) { 
       ratio = fuerzaIsquios / fuerzaCuads;
     }
 
-    // Actualizar la pantalla
+    // Actualizo pantalla
     updateDisplay(fuerzaIsquios, fuerzaCuads, ratio);
 
-    // Enviar la data por BT
+    // Mando por BT
     sendBinaryData(fuerzaIsquios, fuerzaCuads, ratio);
 
   }
-}
-
-void updateBTdisplay() {
-  // Esta funcion ya no es necesaria porque el estado BT se dibuja en updateDisplay
-  // Se mantiene vacía o se elimina para no romper referencias si las hubiera
 }
 
 //=================================================================
 //  FUNCIONES DE ACCIÓN
 //=================================================================
 
-/**
- * @brief Pone a cero (tara) ambos sensores
- */
+// Tara de los sensores
 void tareSensors() {
   Serial.println("Tarando sensores...");
   tft.fillScreen(TFT_BLACK);
@@ -365,41 +331,31 @@ void tareSensors() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.println("Tarando...");
   
-  sensorIsquios.tare(); // Esta función es bloqueante
-  sensorCuads.tare();   // Esta función es bloqueante
+  sensorIsquios.tare();
+  sensorCuads.tare();
 
   delay(500); 
   tft.fillScreen(TFT_BLACK);
   Serial.println("Tara completa.");
   
-  // Enviar confirmación por BT
+  // Confirmo por BT
   if(SerialBT.connected()) {
     SerialBT.println("Tara Completa");
-    SerialBT.write(0x06); // ACK (Carácter de confirmación)
+    SerialBT.write(0x06); // ACK
     SerialBT.flush();
   }
 }
 
-// Helper para dibujar un arco tipo gauge
+// Dibujo un gauge circular
 void drawGauge(int x, int y, int r, float val, float maxVal, uint16_t color, String label, String units) {
-  // Fondo del arco (gris oscuro)
-  // Angulos: 0 es derecha (3 horas). 
-  // Queremos un arco de ~240 grados, abierto abajo.
-  // Empezamos en 150 grados (abajo izquierda) y terminamos en 30 grados (abajo derecha) pasando por arriba.
-  // drawSmoothArc(x, y, r, ir, startAngle, endAngle, fg_color, bg_color, arc_end)
-  
-  int ir = r - 10; // Grosor del arco
+  int ir = r - 10;
   int startAngle = 135;
   int endAngle = 45;
   
   // Fondo
   sprite.drawSmoothArc(x, y, r, ir, startAngle, endAngle, TFT_DARKGREY, TFT_BLACK, true);
 
-  // Valor mapeado a angulo
-  // startAngle (135) -> 0
-  // endAngle (45) -> maxVal
-  // Nota: drawSmoothArc dibuja en sentido horario. 
-  // De 135 a 405 (45 + 360) son 270 grados de recorrido.
+  // Mapeo el valor a un ángulo (270 grados de recorrido)
   
   float percentage = val / maxVal;
   if (percentage > 1.0) percentage = 1.0;
@@ -408,40 +364,38 @@ void drawGauge(int x, int y, int r, float val, float maxVal, uint16_t color, Str
   int currentEndAngle = startAngle + (int)(percentage * arcLength);
   if (currentEndAngle >= 360) currentEndAngle -= 360;
 
-  // Arco de valor
-  if (val > 0.5) { // Solo dibujar si hay algo de valor para evitar glitches visuales
+  // Arco con el valor actual
+  if (val > 0.5) { 
       sprite.drawSmoothArc(x, y, r, ir, startAngle, currentEndAngle, color, TFT_BLACK, true);
   }
 
-  // Texto Valor
+  // Valor
   sprite.setTextDatum(MC_DATUM); // Middle Center
   sprite.setTextColor(TFT_WHITE, TFT_BLACK);
   sprite.setTextSize(3);
   sprite.drawString(String(val, 0), x, y);
   
-  // Texto Unidades
+  // Unidades
   sprite.setTextSize(1);
   sprite.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   sprite.drawString(units, x, y + 20);
 
-  // Etiqueta (Titulo)
+  // Título
   sprite.setTextSize(2);
   sprite.setTextColor(color, TFT_BLACK);
   sprite.drawString(label, x, y - r - 15);
 }
 
-/**
- * @brief Dibuja los datos en la pantalla ST7789 usando Sprites y Gauges
- */
+// Dibujo todo en la pantalla
 void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
   
-  sprite.fillSprite(TFT_BLACK); // Limpiar todo el frame
+  sprite.fillSprite(TFT_BLACK);
 
-  // Dimensiones
+  // Dimensiones de la pantalla
   int w = 320;
   int h = 170;
   
-  // Centros de los gauges
+  // Posiciones de los gauges
   int r = 55; // Radio
   int yCenter = h / 2 + 10;
   int xLeft = 70;
@@ -461,7 +415,7 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
   sprite.drawString("RATIO H:Q", w/2, yCenter - 20);
   
   sprite.setTextSize(4);
-  // Color del ratio segun rango (ejemplo: 0.6 es saludable)
+  // Color según el rango (0.6 es bueno)
   uint16_t ratioColor = TFT_WHITE;
   if(ratio >= 0.55 && ratio <= 0.75) ratioColor = TFT_GREEN;
   else if (ratio > 0.0) ratioColor = TFT_RED;
@@ -469,7 +423,7 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
   sprite.setTextColor(ratioColor, TFT_BLACK);
   sprite.drawFloat(ratio, 2, w/2, yCenter + 10);
 
-  // 4. Estado Bluetooth (Icono o Texto pequeño)
+  // 4. Estado Bluetooth
   sprite.setTextSize(1);
   sprite.setTextDatum(TR_DATUM); // Top Right
   if (SerialBT.connected()) {
@@ -480,66 +434,54 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
     sprite.drawString("BT: --", w - 5, 5);
   }
 
-  // 5. Debug / Info extra (opcional, abajo)
-  // sprite.setTextDatum(BL_DATUM); // Bottom Left
-  // sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  // sprite.drawString("v2.1", 5, h - 5);
-
-  // Push a pantalla
+  // Mando todo a la pantalla
   sprite.pushSprite(0, 0);
 }
 
 
 void sendBinaryData(float f_isquios, float f_cuads, float f_ratio) {
-     // Solo enviar si hay un teléfono conectado
   if (!SerialBT.connected()) {
     return;
   }
   
-  // 1. Crear el buffer del payload (12 bytes)
+  // buffer del payload (12 bytes)
   byte payload[PAYLOAD_LEN];
   
-  // Copiar los 4 bytes de cada float al buffer
+  // Copio los floats al buffer
   memcpy(payload, &f_isquios, 4);
   memcpy(payload + 4, &f_cuads, 4);
   memcpy(payload + 8, &f_ratio, 4);
 
-  // 2. Calcular el Checksum (XOR de 8 bits)
+  // Checksum
   byte checksum = 0;
   for (int i = 0; i < PAYLOAD_LEN; i++) {
-    checksum ^= payload[i]; // XOR con cada byte del payload
+    checksum ^= payload[i];
   }
 
-  // 3. Enviar el paquete completo
+  // Mando el paquete
   SerialBT.write(STX);
   SerialBT.write(PAYLOAD_LEN);
-  SerialBT.write(payload, PAYLOAD_LEN); // .write() puede enviar un array completo
+  SerialBT.write(payload, PAYLOAD_LEN);
   SerialBT.write(checksum);
   SerialBT.write(ETX);
 }
 
-/**
- * @brief Carga los factores de calibración desde la NVS.
- * Si no existen, usa los valores por defecto.
- * Aplica los factores a los sensores.
- */
+// Cargo la calibración desde la memoria
 void loadCalibration() {
   Serial.println("Cargando calibracion desde NVS...");
-  // Carga el valor, o usa el default (el valor actual) si no se encuentra
+  // Si no hay nada guardado, uso los valores por defecto
   CAL_FACTOR_ISQUIOS = preferences.getFloat("cal_isquios", CAL_FACTOR_ISQUIOS);
   CAL_FACTOR_CUADS = preferences.getFloat("cal_cuads", CAL_FACTOR_CUADS);
 
   Serial.print("Factor Isquios: "); Serial.println(CAL_FACTOR_ISQUIOS);
   Serial.print("Factor Cuads: "); Serial.println(CAL_FACTOR_CUADS);
 
-  // Aplicar los factores a los sensores
+  // Aplico los factores
   sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS);
   sensorCuads.setCalFactor(CAL_FACTOR_CUADS);
 }
 
-/**
- * @brief Guarda los factores de calibración actuales en la NVS.
- */
+// Guardo la calibración en la memoria
 void saveCalibration() {
   Serial.println("Guardando calibracion en NVS...");
   preferences.putFloat("cal_isquios", CAL_FACTOR_ISQUIOS);
@@ -547,7 +489,7 @@ void saveCalibration() {
 
   tft.setTextSize(2);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.setCursor(10, tft.height() / 2); // Centrado
+  tft.setCursor(10, tft.height() / 2);
   tft.print("¡Calibracion Guardada!");
   delay(1000);
 }
