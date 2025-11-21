@@ -322,13 +322,18 @@ void handleSensorDisplay() {
     sensorCuads.update();
 
     // Obtiene el último valor promediado y convierte a Newtons
-    float fuerzaIsquios = max(0.0f, sensorIsquios.getData()) * GRAVITY;
-    float fuerzaCuads = max(0.0f, sensorCuads.getData()) * GRAVITY;
+    float rawIsquios = sensorIsquios.getData() * GRAVITY;
+    float rawCuads = sensorCuads.getData() * GRAVITY;
+
+    // Aplicar Deadzone / Umbral mínimo (3N ~ 0.3kg)
+    float fuerzaIsquios = (rawIsquios > 3.0) ? rawIsquios : 0.0f;
+    float fuerzaCuads = (rawCuads > 3.0) ? rawCuads : 0.0f;
+
     // --- RATIO H:Q (Hamstring-to-Quadriceps ratio)--- 
 
     float ratio = 0.0;
-    if (fuerzaCuads > 0.01) { 
-      ratio = max(0.0f, (fuerzaIsquios / fuerzaCuads));
+    if (fuerzaCuads > 3.0) { 
+      ratio = fuerzaIsquios / fuerzaCuads;
     }
 
     // Actualizar la pantalla
