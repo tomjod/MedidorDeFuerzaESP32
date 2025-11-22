@@ -45,7 +45,7 @@ HX711_ADC sensorCuads(PIN_CUADS_DAT, PIN_CUADS_CLK);
 Preferences preferences;
 
 // --- CALIBRACIÓN ---
-volatile float CAL_FACTOR_ISQUIOS = 43082.0; 
+volatile float CAL_FACTOR_ISQUIOS = 43082.0; // Compr
 volatile float CAL_FACTOR_CUADS = 43540.0;   
 
 // --- VARIABLES GLOBALES (TIMERS) ---
@@ -65,10 +65,13 @@ int lastButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
 const int DEBOUNCE_DELAY_MS = 100;
 
+// --- MODO CALIBRACIÓN ---
+bool calibrationMode = false;
+
 // --- DEFINICIÓN DEL PAQUETE BINARIO ---
 #define STX 0x02 // STX
 #define ETX 0x03 // ETX
-#define PAYLOAD_LEN 12 // 3 floats * 4 bytes/float = 12 bytes
+#define PAYLOAD_LEN 8 // 2 floats * 4 bytes/float = 8 bytes
 
 const float GRAVITY = 9.81; // Factor de conversión Kg -> Newtons
 
@@ -86,8 +89,9 @@ void updateBTdisplay();
 void drawStaticUI();
 void loadCalibration(); 
 void saveCalibration(); 
-void sendBinaryData(float f_isquios, float f_cuads, float f_ratio);
-void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio);
+void sendBinaryData(float f_isquios, float f_cuads);
+void updateDisplay(float fuerzaIsquios, float fuerzaCuads);
+void showCalibrationScreen();
 
 
 
@@ -95,7 +99,7 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio);
 //  SETUP
 //=================================================================
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(19200);
   Serial.println("Iniciando Medidor de Fuerza H:Q (v2.1)...");
 
   // Cargo la calibración que tengo guardada
@@ -161,6 +165,7 @@ void initSensors() {
   sensorIsquios.begin();
   sensorIsquios.setGain(128);
   sensorIsquios.setCalFactor(CAL_FACTOR_ISQUIOS);
+  sensorIsquios.setReverseOutput(); // Invertir salida para tracción
   sensorIsquios.start(2000, true); // 2s para estabilizar
   if (sensorIsquios.getTareTimeoutFlag()) {
     Serial.println("Error S1 Timeout");
@@ -170,6 +175,7 @@ void initSensors() {
   sensorCuads.begin();
   sensorCuads.setGain(128);
   sensorCuads.setCalFactor(CAL_FACTOR_CUADS);
+  sensorCuads.setReverseOutput(); // Invertir salida para tracción
   sensorCuads.start(2000, true); // 2s para estabilizar
   if (sensorCuads.getTareTimeoutFlag()) {
     Serial.println("Error S2 Timeout");
@@ -266,6 +272,21 @@ void handleBluetooth() {
   else if (cmdString == "load") { // Recargar
     loadCalibration();
   }
+  else if (cmdString == "cal") { // Modo Calibración
+    calibrationMode = !calibrationMode;
+    if (calibrationMode) {
+      Serial.println("Modo Calibración ACTIVADO - Mostrando valores RAW");
+      if (SerialBT.connected()) {
+        SerialBT.println("Modo Calibración ACTIVADO");
+      }
+    } else {
+      Serial.println("Modo Calibración DESACTIVADO");
+      if (SerialBT.connected()) {
+        SerialBT.println("Modo Calibración DESACTIVADO");
+      }
+      tft.fillScreen(TFT_BLACK);
+    }
+  }
 }
 
 // LEDs de estado
@@ -294,6 +315,12 @@ void handleSensorDisplay() {
     sensorIsquios.update();
     sensorCuads.update();
 
+    // Si estoy en modo calibración, muestro valores RAW
+    if (calibrationMode) {
+      showCalibrationScreen();
+      return;
+    }
+
     // Obtengo el valor y lo paso a Newtons
     float rawIsquios = sensorIsquios.getData() * GRAVITY;
     float rawCuads = sensorCuads.getData() * GRAVITY;
@@ -302,18 +329,11 @@ void handleSensorDisplay() {
     float fuerzaIsquios = (rawIsquios > 3.0) ? rawIsquios : 0.0f;
     float fuerzaCuads = (rawCuads > 3.0) ? rawCuads : 0.0f;
 
-    // Ratio H:Q
-
-    float ratio = 0.0;
-    if (fuerzaCuads > 3.0) { 
-      ratio = fuerzaIsquios / fuerzaCuads;
-    }
-
     // Actualizo pantalla
-    updateDisplay(fuerzaIsquios, fuerzaCuads, ratio);
+    updateDisplay(fuerzaIsquios, fuerzaCuads);
 
     // Mando por BT
-    sendBinaryData(fuerzaIsquios, fuerzaCuads, ratio);
+    sendBinaryData(fuerzaIsquios, fuerzaCuads);
 
   }
 }
@@ -387,7 +407,7 @@ void drawGauge(int x, int y, int r, float val, float maxVal, uint16_t color, Str
 }
 
 // Dibujo todo en la pantalla
-void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
+void updateDisplay(float fuerzaIsquios, float fuerzaCuads) {
   
   sprite.fillSprite(TFT_BLACK);
 
@@ -408,20 +428,20 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
   drawGauge(xRight, yCenter, r, fuerzaCuads, 1000.0, TFT_ORANGE, "CUADS", "N");
 
   // 3. Ratio (Centro)
-  sprite.setTextDatum(MC_DATUM);
-  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  //sprite.setTextDatum(MC_DATUM);
+  //sprite.setTextColor(TFT_WHITE, TFT_BLACK);
   
-  sprite.setTextSize(1);
-  sprite.drawString("RATIO H:Q", w/2, yCenter - 20);
+  //sprite.setTextSize(1);
+  //sprite.drawString("RATIO H:Q", w/2, yCenter - 20);
   
-  sprite.setTextSize(4);
+  //sprite.setTextSize(4);
   // Color según el rango (0.6 es bueno)
-  uint16_t ratioColor = TFT_WHITE;
-  if(ratio >= 0.55 && ratio <= 0.75) ratioColor = TFT_GREEN;
-  else if (ratio > 0.0) ratioColor = TFT_RED;
+  //uint16_t ratioColor = TFT_WHITE;
+  //if(ratio >= 0.55 && ratio <= 0.75) ratioColor = TFT_GREEN;
+  //else if (ratio > 0.0) ratioColor = TFT_RED;
   
-  sprite.setTextColor(ratioColor, TFT_BLACK);
-  sprite.drawFloat(ratio, 2, w/2, yCenter + 10);
+  //sprite.setTextColor(ratioColor, TFT_BLACK);
+  //sprite.drawFloat(ratio, 2, w/2, yCenter + 10);
 
   // 4. Estado Bluetooth
   sprite.setTextSize(1);
@@ -439,7 +459,7 @@ void updateDisplay(float fuerzaIsquios, float fuerzaCuads, float ratio) {
 }
 
 
-void sendBinaryData(float f_isquios, float f_cuads, float f_ratio) {
+void sendBinaryData(float f_isquios, float f_cuads) {
   if (!SerialBT.connected()) {
     return;
   }
@@ -450,7 +470,6 @@ void sendBinaryData(float f_isquios, float f_cuads, float f_ratio) {
   // Copio los floats al buffer
   memcpy(payload, &f_isquios, 4);
   memcpy(payload + 4, &f_cuads, 4);
-  memcpy(payload + 8, &f_ratio, 4);
 
   // Checksum
   byte checksum = 0;
@@ -481,6 +500,30 @@ void loadCalibration() {
   sensorCuads.setCalFactor(CAL_FACTOR_CUADS);
 }
 
+// Actualizo el estado de Bluetooth y manejo reconexiones
+void updateBTdisplay() {
+  bool currentBTState = SerialBT.connected();
+  
+  // Detecto si hubo una desconexión
+  if (lastBTState && !currentBTState) {
+    Serial.println("Bluetooth desconectado. Reiniciando servicio...");
+    
+    // Termino la conexión actual para liberar el socket
+    SerialBT.end();
+    delay(500); // Espero a que se libere completamente
+    
+    // Reinicio el servicio Bluetooth
+    if (SerialBT.begin("ESP32_Fuerza_HQ")) {
+      Serial.println("Bluetooth reiniciado. Listo para nueva conexión.");
+    } else {
+      Serial.println("Error al reiniciar Bluetooth");
+    }
+  }
+  
+  // Actualizo el estado anterior
+  lastBTState = currentBTState;
+}
+
 // Guardo la calibración en la memoria
 void saveCalibration() {
   Serial.println("Guardando calibracion en NVS...");
@@ -492,4 +535,92 @@ void saveCalibration() {
   tft.setCursor(10, tft.height() / 2);
   tft.print("¡Calibracion Guardada!");
   delay(1000);
+}
+
+// Pantalla de calibración con valores RAW
+void showCalibrationScreen() {
+  // Obtengo valores calibrados (en kg)
+  float dataIsquios = sensorIsquios.getData(); // En kg (ya calibrado)
+  float dataCuads = sensorCuads.getData();     // En kg (ya calibrado)
+  
+  // Obtengo el offset de tara y factores de calibración
+  long tareIsquios = sensorIsquios.getTareOffset();
+  long tareCuads = sensorCuads.getTareOffset();
+  float calIsquios = sensorIsquios.getCalFactor();
+  float calCuads = sensorCuads.getCalFactor();
+  
+  // Calculo el valor RAW del ADC: RAW = (getData() * calFactor) + tareOffset
+  long rawIsquios = (long)(dataIsquios * calIsquios) + tareIsquios;
+  long rawCuads = (long)(dataCuads * calCuads) + tareCuads;
+
+  sprite.fillSprite(TFT_BLACK);
+  
+  // Título
+  sprite.setTextDatum(TC_DATUM);
+  sprite.setTextSize(2);
+  sprite.setTextColor(TFT_YELLOW, TFT_BLACK);
+  sprite.drawString("MODO CALIBRACION", 160, 5);
+  
+  // Línea divisoria
+  sprite.drawLine(10, 30, 310, 30, TFT_DARKGREY);
+  
+  // SENSOR ISQUIOS
+  sprite.setTextDatum(TL_DATUM);
+  sprite.setTextSize(2);
+  sprite.setTextColor(TFT_CYAN, TFT_BLACK);
+  sprite.drawString("ISQUIOS (Traccion)", 10, 38);
+  
+  sprite.setTextSize(1);
+  sprite.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  sprite.drawString("RAW ADC: " + String(rawIsquios), 10, 58);
+  sprite.drawString("Tare: " + String(tareIsquios), 170, 58);
+  
+  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  sprite.drawString("Cal: " + String(calIsquios, 0), 10, 73);
+  sprite.drawString("kg: " + String(dataIsquios, 3), 10, 88);
+  sprite.drawString("N: " + String(dataIsquios * GRAVITY, 1), 170, 88);
+  
+  // Línea divisoria
+  sprite.drawLine(10, 105, 310, 105, TFT_DARKGREY);
+  
+  // SENSOR CUÁDRICEPS
+  sprite.setTextSize(2);
+  sprite.setTextColor(TFT_ORANGE, TFT_BLACK);
+  sprite.drawString("CUADRICEPS (Compresion)", 10, 113);
+  
+  sprite.setTextSize(1);
+  sprite.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  sprite.drawString("RAW ADC: " + String(rawCuads), 10, 133);
+  sprite.drawString("Tare: " + String(tareCuads), 170, 133);
+  
+  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  sprite.drawString("Cal: " + String(calCuads, 0), 10, 148);
+  sprite.drawString("kg: " + String(dataCuads, 3), 10, 163);
+  sprite.drawString("N: " + String(dataCuads * GRAVITY, 1), 170, 163);
+  
+  // Muestro en pantalla
+  sprite.pushSprite(0, 0);
+  
+  // También envío por Serial para debugging detallado
+  Serial.print("ISQ-> RAW:");
+  Serial.print(rawIsquios);
+  Serial.print(" Tare:");
+  Serial.print(tareIsquios);
+  Serial.print(" Cal:");
+  Serial.print(calIsquios, 0);
+  Serial.print(" kg:");
+  Serial.print(dataIsquios, 3);
+  Serial.print(" N:");
+  Serial.print(dataIsquios * GRAVITY, 2);
+  
+  Serial.print(" || CUA-> RAW:");
+  Serial.print(rawCuads);
+  Serial.print(" Tare:");
+  Serial.print(tareCuads);
+  Serial.print(" Cal:");
+  Serial.print(calCuads, 0);
+  Serial.print(" kg:");
+  Serial.print(dataCuads, 3);
+  Serial.print(" N:");
+  Serial.println(dataCuads * GRAVITY, 2);
 }
