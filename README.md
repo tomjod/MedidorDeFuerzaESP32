@@ -101,4 +101,4 @@ El sistema permite calibración remota vía comandos Serial/Bluetooth:
 
 ---
 
-*Proyecto desarrollado por Alexis Ocando para Andrea Zunino*
+*Proyecto desarrollado por Alexis Ocando*
